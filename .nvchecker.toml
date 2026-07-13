@@ -1,0 +1,8 @@
+# nvchecker configuration for tracking upstream dm-vdo/vdo releases.
+# Run locally:  nvchecker --file .nvchecker.toml
+# Tags follow plain numeric scheme: 8.3.2.1 (no "v" prefix).
+
+[vdo]
+source = "github"
+github = "dm-vdo/vdo"
+use_max_tag = true

@@ -1,0 +1,88 @@
+name: Check for upstream updates
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install system dependencies
+        run: |
+          pacman -Syu --noconfirm nvchecker pacman-contrib git base-devel jq
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for new upstream version
+        id: version-check
+        run: |
+          # Parse current version from PKGBUILD
+          current=$(grep -oP '^pkgver=\K.*' PKGBUILD)
+
+          # Run nvchecker against upstream
+          nvchecker --file .nvchecker.toml --logger json > /tmp/nvchecker.json
+          new_version=$(jq -r '.[] | select(.name == "vdo") | .version' /tmp/nvchecker.json)
+
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          echo "new=${new_version}" >> "$GITHUB_OUTPUT"
+
+          if [ "${current}" != "${new_version}" ] && [ -n "${new_version}" ]; then
+            echo "Update available: ${current} -> ${new_version}"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Already up-to-date (${current})."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update PKGBUILD and checksums
+        if: steps.version-check.outputs.available == 'true'
+        run: |
+          new_ver="${{ steps.version-check.outputs.new }}"
+
+          # Bump pkgver, reset pkgrel
+          sed -i "s/^pkgver=.*/pkgver=${new_ver}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+
+          # Recalculate checksums (downloads new source tarball)
+          updpkgsums
+
+          # Regenerate .SRCINFO
+          makepkg --printsrcinfo > .SRCINFO
+
+          # Show diff for the log
+          git diff
+
+      - name: Create Pull Request
+        if: steps.version-check.outputs.available == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "upgpkg: vdo ${{ steps.version-check.outputs.new }}"
+          branch: "update/vdo-${{ steps.version-check.outputs.new }}"
+          delete-branch: true
+          title: "⬆️ Update vdo to ${{ steps.version-check.outputs.new }}"
+          body: |
+            Upstream [dm-vdo/vdo](https://github.com/dm-vdo/vdo) has released version **${{ steps.version-check.outputs.new }}** (current: `${{ steps.version-check.outputs.current }}`).
+
+            **Changes applied automatically:**
+            - `pkgver` bumped to `${{ steps.version-check.outputs.new }}`
+            - `pkgrel` reset to `1`
+            - `sha256sums` recalculated via `updpkgsums`
+            - `.SRCINFO` regenerated
+
+            **Before merging, verify:**
+            - [ ] CI build passes (see checks below)
+            - [ ] Upstream changelog reviewed: https://github.com/dm-vdo/vdo/releases
+            - [ ] Dependencies (`depends`/`optdepends`) still correct
+            - [ ] `namcap` output clean
+          labels: |
+            update
+            automated

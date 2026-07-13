@@ -1,0 +1,53 @@
+name: Build and verify
+
+on:
+  pull_request:
+    paths:
+      - 'PKGBUILD'
+      - '.SRCINFO'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm base-devel git namcap
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install package dependencies
+        # --asdeps so namcap doesn't flag them as "not required"
+        run: |
+          pacman -S --noconfirm --asdeps bash glibc util-linux-libs zlib
+
+      - name: Build package
+        # Run as non-root (makepkg refuses to run as root).
+        # We create a builder user that owns the workspace.
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          su builder -c "makepkg -sf --noconfig --noconfirm"
+
+      - name: Run namcap
+        run: |
+          namcap vdo-*.pkg.tar.zst | tee namcap.log
+          # Warn on errors but don't fail (some warnings are cosmetic)
+          if grep -q '^vdo.*E:' namcap.log; then
+            echo "::warning::namcap reported errors — review before merging"
+          fi
+
+      - name: Upload built package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vdo-package
+          path: vdo-*.pkg.tar.zst
+
+      - name: Upload namcap report
+        uses: actions/upload-artifact@v4
+        with:
+          name: namcap-report
+          path: namcap.log
