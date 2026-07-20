@@ -28,14 +28,28 @@ jobs:
           # Parse current version from PKGBUILD
           current=$(grep -oP '^pkgver=\K.*' PKGBUILD)
 
-          # Run nvchecker against upstream
-          nvchecker --file .nvchecker.toml --logger json > /tmp/nvchecker.json
-          new_version=$(jq -r '.[] | select(.name == "vdo") | .version' /tmp/nvchecker.json)
+          # Ask nvchecker for the upstream version. We use a version record
+          # file (-n): a plain JSON object mapping entry names to versions,
+          # e.g. {"vdo": "8.3.2.1"}. This is the documented interface for
+          # scripting — more stable than parsing the NDJSON log output.
+          nvchecker -c .nvchecker.toml -n /tmp/newver.json
+
+          if [ ! -s /tmp/newver.json ]; then
+            echo "::error::nvchecker produced no result file"
+            exit 1
+          fi
+
+          new_version=$(jq -r '.vdo // empty' /tmp/newver.json)
+
+          if [ -z "${new_version}" ]; then
+            echo "::error::nvchecker found no version for 'vdo' (check upstream/tags)"
+            exit 1
+          fi
 
           echo "current=${current}" >> "$GITHUB_OUTPUT"
           echo "new=${new_version}" >> "$GITHUB_OUTPUT"
 
-          if [ "${current}" != "${new_version}" ] && [ -n "${new_version}" ]; then
+          if [ "${current}" != "${new_version}" ]; then
             echo "Update available: ${current} -> ${new_version}"
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
